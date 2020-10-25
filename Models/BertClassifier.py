@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 
-class BERTClassifier4way(nn.Module):
+class BERTClassifier(nn.Module):
     def __init__(self,
                  bert,
                  hidden_size = 768,
                  num_classes=5,
                  dr_rate=None,
                  params=None):
-        super(BERTClassifier4way, self).__init__()
+        super(BERTClassifier, self).__init__()
         self.bert = bert
         self.dr_rate = dr_rate
                  

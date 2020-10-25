@@ -1,4 +1,4 @@
-import tqdm
+from tqdm import tqdm
 import torch
 import os
 from torch import nn
@@ -10,7 +10,7 @@ from transformers import AdamW
 from transformers.optimization import get_linear_schedule_with_warmup
 from tensorboardX import SummaryWriter
 from transformers import AutoTokenizer, TFAutoModel
-
+from pytorch_transformers import BertConfig, BertForSequenceClassification
 
 TENSORBOARD_DIR = "./tensorboard"
 if not os.path.exists(TENSORBOARD_DIR):
@@ -49,15 +49,20 @@ log_interval = 200
 learning_rate =  5e-5
 dr_rate = 0.5
 
-device = torch.device("cuda:1")
+device = torch.device("cuda:5")
 torch.cuda.set_device(device)
 
-bertmodel = TFAutoModel.from_pretrained("bert-base-uncased")
+#bertmodel = TFAutoModel.from_pretrained("bert-base-uncased")
 #bertmodel, vocab  = get_pytorch_kobert_model_adapter()
-model = BertClassifier.BERTClassifier(bertmodel, dr_rate=dr_rate).to(device)
-vocab = open("./Models/vocab.txt")
+#model = BertClassifier.BERTClassifier(bertmodel, dr_rate=dr_rate).to(device)
 
-prepare_train_adapter(model)
+config = BertConfig(vocab_size_or_config_json_file=32000, hidden_size=768,
+            num_hidden_layers=12, num_attention_heads=12, intermediate_size=3072)
+num_labels=5
+model = BertForSequenceClassification.from_pretrained('bert-base-uncased')
+model.to(device)
+
+#prepare_train_adapter(model)
 
 no_decay = ['bias', 'LayerNorm.weight']
 optimizer_grouped_parameters = [
@@ -67,11 +72,11 @@ optimizer_grouped_parameters = [
 optimizer = AdamW(optimizer_grouped_parameters, lr=learning_rate)
 loss_fn = nn.CrossEntropyLoss()
 
-train_d = load_train(vocab)
+train_d = load_train()
 print("finished loading train")
 print(train_d[0])
 
-test_d = load_text(vocab)
+test_d = load_test()
 print(test_d[0])
 
 t_total = len(train_d) * num_epochs
@@ -96,20 +101,24 @@ for e in range(num_epochs):
     print("total train data : %d" % len(train_d))
     print("total steps %d" % steps)
     #for batch_id, (token_ids, valid_length, segment_ids, label) in enumerate(tqdm.tqdm(train_d)):
-    for batch_id in tqdm.tqdm(range(steps)):
+    print("START TRAINING!!!!!!!!!!!!!!!!!!!")
+    for batch_id in tqdm(range(steps)):
         batch = train_d[batch_size*batch_id:batch_size*(batch_id+1)]
         token_ids, valid_length, segment_ids, labels  = [], [], [], []
 
-        for el in range(len(batch)):
-            token_id, val_len, segment_id = batch[el][0]
+        for i in range(len(batch)):
+            print(f"batch[0]: {batch[0][0]}, batch[1]: {batch[1]}")
+            token_id = batch[i][0]['input_ids']
+            val_len = batch[i][0]['token_type_ids']
+            segment_id = batch[i][0]['attention_mask']
+            print(f"i: {i}, token_id: {token_id}, val_len: {val_len}, segment_id: {segment_id}")
             token_ids.append(token_id)
-            valid_length.append(int(val_len))
+            valid_length.append(val_len)
             segment_ids.append(segment_id)
 
-            label = batch[el][1]
+            label = batch[i][1]
             labels.append(label)
 
-        # print("token_ids: {}, valid_length: {}, segment_ids: {}".format(token_ids.shape, valid_length.shape, segment_ids.shape))
         token_ids = torch.LongTensor(token_ids)
         valid_length = torch.LongTensor(valid_length)
         segment_ids = torch.LongTensor(segment_ids)
@@ -118,7 +127,7 @@ for e in range(num_epochs):
         optimizer.zero_grad()
         token_ids = token_ids.long().to(device)
         segment_ids = segment_ids.long().to(device)
-        valid_length= valid_length
+        valid_length= valid_length.long().to(device)
         labels = labels.long().to(device)
 
         out = model(token_ids, valid_length, segment_ids)
@@ -145,15 +154,14 @@ for e in range(num_epochs):
 
     model.eval()
     steps = len(test_d) // batch_size
-    for batch_id in tqdm.tqdm(range(steps)):
+    for batch_id in tqdm(range(steps)):
         batch = test_d[batch_size*batch_id:batch_size*(batch_id+1)]
         token_ids, valid_length, segment_ids, labels  = [], [], [], []
 
         for el in range(len(batch)):
-            token_id, val_len, segment_id = batch[el][0]
-            token_ids.append(token_id)
-            valid_length.append(int(val_len))
-            segment_ids.append(segment_id)
+            token_ids.append(batch[el][0]['input_ids'])
+            valid_length.append(batch[el][0]['token_type_ids'])
+            segment_ids.append(batch[el][0]['attention_mask'])
 
             label = batch[el][1]
             labels.append(label)
