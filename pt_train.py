@@ -39,6 +39,10 @@ class BertForMultiLabelSequenceClassification(PreTrainedBertModel):
             param.requires_grad = True
 """
 
+
+
+train_name = "batch_size_8_train_100k_epoch_5"
+
 train_df = pd.read_csv('./data/train.csv', sep=',')
 test_df = pd.read_csv('./data/test.csv', sep=',')
 
@@ -53,8 +57,8 @@ test_df.dropna(inplace=True)
 #train_df = train_df.sample(frac=0.1, random_state=999)
 #test_df = test_df.sample(frac=0.1, random_state=999)
 
-train_df = train_df.sample(frac=1.0, random_state=999)
-test_df = test_df.sample(frac=1.0, random_state=999)
+train_df = train_df.sample(frac=0.031, random_state=999) # about 100,000
+test_df = test_df.sample(frac=0.031, random_state=999)
 
 class NsmcDataset(Dataset):
     ''' Naver Sentiment Movie Corpus Dataset '''
@@ -72,9 +76,10 @@ class NsmcDataset(Dataset):
     
 nsmc_train_dataset = NsmcDataset(train_df)
 print(f"Train dataset: {len(nsmc_train_dataset)}")
-train_loader = DataLoader(nsmc_train_dataset, batch_size=16, shuffle=True, num_workers=2)
+itr_num = len(nsmc_train_dataset)
+train_loader = DataLoader(nsmc_train_dataset, batch_size=8, shuffle=True, num_workers=2)
 
-device = torch.device("cuda:3")
+device = torch.device("cuda:7")
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 #model = BertForSequenceClassification.from_pretrained('bert-base-multilingual-cased')
 #config = BertConfig.from_pretrained("bert-base-uncased")
@@ -86,11 +91,17 @@ optimizer = Adam(model.parameters(), lr=1e-6)
 
 itr = 1
 p_itr = 500
-epochs = 3
+s_itr = 10000
+epochs = 5
 total_loss = 0
 total_len = 0
 total_correct = 0
 
+def save_checkpoint(model, save_pth):
+    if not os.path.exists(os.path.dirname(save_pth)):
+        os.makedirs(os.path.dirname(save_pth))
+    torch.save(model.cpu().state_dict(), save_pth)
+    model.to(device)
 
 model.train()
 for epoch in range(epochs):
@@ -104,7 +115,6 @@ for epoch in range(epochs):
            e = encoded_list[i]
            if (len(e) > 512):
                encoded_list[i] = e[:512]
-               print("\n")
         padded_list =  [e + [0] * (512-len(e)) for e in encoded_list]
         
         sample = torch.tensor(padded_list)
@@ -124,20 +134,28 @@ for epoch in range(epochs):
         
         if itr % p_itr == 0:
             print("\n############")
-            print('[Epoch {}/{}] Iteration {} -> Train Loss: {:.4f}, Accuracy: {:.3f}'.format(epoch+1, epochs, itr, total_loss/p_itr, total_correct/total_len))
+            print('[Epoch {}/{}] Iteration {}/{} -> Train Loss: {:.4f}, Accuracy: {:.3f}'.format(epoch+1, epochs, itr, itr_num, total_loss/p_itr, total_correct/total_len))
             print("############\n")
             total_loss = 0
             total_len = 0
             total_correct = 0
 
+        if itr % s_itr == 0:
+            # save model
+            model_name = "{}_{}_ckpt.pth".format(epoch, itr)
+            print("saving the model.. {}".format(model_name))
+            save_checkpoint(model, "./ckpt/{}/{}".format(train_name,model_name))
+           
         itr+=1
-        
+    model_name = "{}_ckpt.pth".format(epoch)
+    print("saving the model.. {}".format(model_name))
+    save_checkpoint(model, "./ckpt/{}/{}".format(train_name,model_name))
 # evaluation
 model.eval()
 
 nsmc_eval_dataset = NsmcDataset(test_df)
 print(f"Eval dataset: {len(nsmc_eval_dataset)}")
-eval_loader = DataLoader(nsmc_eval_dataset, batch_size=16, shuffle=False, num_workers=2)
+eval_loader = DataLoader(nsmc_eval_dataset, batch_size=8, shuffle=False, num_workers=2)
 
 total_loss = 0
 total_len = 0
@@ -149,11 +167,7 @@ for text, label in eval_loader:
     for i in range(len(encoded_list)):
        e = encoded_list[i]
        if (len(e) > 512):
-           print("\n")
-           print(f"change length {len(e)}")
            encoded_list[i] = e[:512]
-           print(f"to {len(encoded_list[i])}")
-           print("\n")
     padded_list =  [e + [0] * (512-len(e)) for e in encoded_list]
     
     sample = torch.tensor(padded_list)
