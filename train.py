@@ -1,179 +1,144 @@
-from tqdm import tqdm
+import numpy as np
+import pandas as pd
 import torch
+from torch.utils.data import Dataset, DataLoader
+from pytorch_transformers import BertTokenizer, BertForSequenceClassification, BertConfig, BertModel
+from torch.optim import Adam
+import torch.nn.functional as F
 import os
-from torch import nn
-from load_dataset import *
-from Models import BertClassifier
-#from KoBERT.kobert.pytorch_kobert_adapter import get_pytorch_kobert_model_adapter
-from transformers import AdamW
-#from transformers.optimization import WarmupLinearSchedule
-from transformers.optimization import get_linear_schedule_with_warmup
-from tensorboardX import SummaryWriter
-from transformers import AutoTokenizer, TFAutoModel
-from pytorch_transformers import BertConfig, BertForSequenceClassification
 
-TENSORBOARD_DIR = "./tensorboard"
-if not os.path.exists(TENSORBOARD_DIR):
-    os.mkdir(TENSORBOARD_DIR)
-task = "rate"
-writerDIR = os.path.join(TENSORBOARD_DIR, task)
-if not os.path.exists(writerDIR):
-    os.mkdir(writerDIR)
-writer = SummaryWriter(writerDIR)
+train_name = "batch_size_16_train_300k_epoch_5_new_data"
 
-if not os.path.exists("./ckpt/{}".format(task)):
-    os.makedirs("./ckpt/{}".format(task))
+train_df = pd.read_csv('./data/n_train.csv', sep=',')
+test_df = pd.read_csv('./data/n_test.csv', sep=',')
 
-def calc_accuracy(X,Y):
-    max_vals, max_indices = torch.max(X, 1)
-    train_acc = (max_indices == Y).sum().data.cpu().numpy()/max_indices.size()[0]
-    return train_acc
+train_df.dropna(inplace=True)
+test_df.dropna(inplace=True)
 
-def prepare_train_adapter(model):
-    model.train()
-    for name, param in model.named_parameters():
-        param.requires_grad = True
+train_df = train_df.sample(frac=1.0, random_state=999) # about 100,000
+test_df = test_df.sample(frac=1.0, random_state=999)
+
+class RateDataset(Dataset):
+    ''' Amazon Product Dataset '''
+    def __init__(self, df):
+        self.df = df
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        text = self.df.iloc[idx, 1]
+        label = int(self.df.iloc[idx, 2]-1)
+        #print(f"text: {text}, label: {label}")
+        return text, label
+    
+rate_train_dataset = RateDataset(train_df)
+print(f"Train dataset: {len(rate_train_dataset)}")
+itr_num = len(rate_train_dataset)
+train_loader = DataLoader(rate_train_dataset, batch_size=16, shuffle=True, num_workers=2)
+
+device = torch.device("cuda:7")
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+#model = BertForSequenceClassification.from_pretrained('bert-base-multilingual-cased')
+#config = BertConfig.from_pretrained("bert-base-uncased")
+model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=5)
+#model = BertForMultiLabelSequenceClassification(config)
+model.to(device)
+
+optimizer = Adam(model.parameters(), lr=1e-6)
+
+itr = 1
+p_itr = 500
+s_itr = 10000
+epochs = 5
+total_loss = 0
+total_len = 0
+total_correct = 0
 
 def save_checkpoint(model, save_pth):
     if not os.path.exists(os.path.dirname(save_pth)):
         os.makedirs(os.path.dirname(save_pth))
     torch.save(model.cpu().state_dict(), save_pth)
-    model.cuda()
+    model.to(device)
 
-## Setting parameters
-batch_size = 64
-warmup_ratio = 0.1
-num_epochs = 250
-max_grad_norm = 1
-log_interval = 200
-learning_rate =  5e-5
-dr_rate = 0.5
-
-device = torch.device("cuda:5")
-torch.cuda.set_device(device)
-
-#bertmodel = TFAutoModel.from_pretrained("bert-base-uncased")
-#bertmodel, vocab  = get_pytorch_kobert_model_adapter()
-#model = BertClassifier.BERTClassifier(bertmodel, dr_rate=dr_rate).to(device)
-
-config = BertConfig(vocab_size_or_config_json_file=32000, hidden_size=768,
-            num_hidden_layers=12, num_attention_heads=12, intermediate_size=3072)
-num_labels=5
-model = BertForSequenceClassification.from_pretrained('bert-base-uncased')
-model.to(device)
-
-#prepare_train_adapter(model)
-
-no_decay = ['bias', 'LayerNorm.weight']
-optimizer_grouped_parameters = [
-    {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-    {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-]
-optimizer = AdamW(optimizer_grouped_parameters, lr=learning_rate)
-loss_fn = nn.CrossEntropyLoss()
-
-train_d = load_train()
-print("finished loading train")
-print(train_d[0])
-
-test_d = load_test()
-print(test_d[0])
-
-t_total = len(train_d) * num_epochs
-warmup_step = int(t_total * warmup_ratio)
-#scheduler = WarmupLinearSchedule(optimizer, warmup_steps=warmup_step, t_total=t_total)
-scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_step, num_training_steps=t_total)
-
-#sequence_output, pooled_output = model(input_ids, input_mask, token_type_ids)
-#pooled_output.shape
-
-print("num of trainable parameters")
-model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-params = sum([np.prod(p.size()) for p in model_parameters])
-print(params)
-
-
-for e in range(num_epochs):
-    train_acc = 0.0
-    test_acc = 0.0
-    model.train()
-    steps = len(train_d) // batch_size
-    print("total train data : %d" % len(train_d))
-    print("total steps %d" % steps)
-    #for batch_id, (token_ids, valid_length, segment_ids, label) in enumerate(tqdm.tqdm(train_d)):
-    print("START TRAINING!!!!!!!!!!!!!!!!!!!")
-    for batch_id in tqdm(range(steps)):
-        batch = train_d[batch_size*batch_id:batch_size*(batch_id+1)]
-        token_ids, valid_length, segment_ids, labels  = [], [], [], []
-
-        for i in range(len(batch)):
-            print(f"batch[0]: {batch[0][0]}, batch[1]: {batch[1]}")
-            token_id = batch[i][0]['input_ids']
-            val_len = batch[i][0]['token_type_ids']
-            segment_id = batch[i][0]['attention_mask']
-            print(f"i: {i}, token_id: {token_id}, val_len: {val_len}, segment_id: {segment_id}")
-            token_ids.append(token_id)
-            valid_length.append(val_len)
-            segment_ids.append(segment_id)
-
-            label = batch[i][1]
-            labels.append(label)
-
-        token_ids = torch.LongTensor(token_ids)
-        valid_length = torch.LongTensor(valid_length)
-        segment_ids = torch.LongTensor(segment_ids)
-        labels = torch.LongTensor(labels)
-
+model.train()
+for epoch in range(epochs):
+    
+    for text, label in train_loader:
         optimizer.zero_grad()
-        token_ids = token_ids.long().to(device)
-        segment_ids = segment_ids.long().to(device)
-        valid_length= valid_length.long().to(device)
-        labels = labels.long().to(device)
+        
+        # encoding and zero padding
+        encoded_list = [tokenizer.encode(t, add_special_tokens=True) for t in text]
+        for i in range(len(encoded_list)):
+           e = encoded_list[i]
+           if (len(e) > 512):
+               encoded_list[i] = e[:512]
+        padded_list =  [e + [0] * (512-len(e)) for e in encoded_list]
+        
+        sample = torch.tensor(padded_list)
+        sample, label = sample.to(device), label.to(device)
+#        labels = label.clone().detach()
+        labels = torch.tensor(label)
+        outputs = model(sample, labels=labels)
+        loss, logits = outputs
 
-        out = model(token_ids, valid_length, segment_ids)
-        loss = loss_fn(out, labels)
-        #loss.requires_grad = True
+        pred = torch.argmax(F.softmax(logits), dim=1)
+        correct = pred.eq(labels)
+        total_correct += correct.sum().item()
+        total_len += len(labels)
+        total_loss += loss.item()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
-        scheduler.step()  # Update learning rate schedule
-        train_acc += calc_accuracy(out, labels)
-        if batch_id % log_interval == 0:
-            print("epoch {} batch id {} loss {} train acc {}".format(e, batch_id+1, loss.data.cpu().numpy(), train_acc / (batch_id+1)))
-        # tensorboard
-        writer.add_scalar("train/loss", loss, batch_id + steps*e)
-    print("epoch {} train acc {}".format(e, train_acc / (batch_id+1)))
-    writer.add_scalar("train/accuracy", train_acc/(batch_id+1), e)
+        acc = total_correct/total_len    
 
-    # save model
-    if (e%50 == 0):
-        model_name = "{}_ckpt.pth".format(e)
-        print("saving the model.. {}".format(model_name))
-        save_checkpoint(model, "./ckpt/{}".format(model_name))
+        if itr % p_itr == 0:
+            print("\n############")
+            print('[Epoch {}/{}] Iteration {}/{} -> Train Loss: {:.4f}, Accuracy: {:.3f}'.format(epoch+1, epochs, itr, itr_num, total_loss/p_itr, total_correct/total_len))
+            print("############\n")
+            total_loss = 0
+            total_len = 0
+            total_correct = 0
 
+        if itr % s_itr == 0:
+            # save model
+            model_name = "{}_{}_{:.3f}_ckpt.pth".format(epoch, itr, acc)
+            print("saving the model.. {}".format(model_name))
+            save_checkpoint(model, "./ckpt/{}/{}".format(train_name,model_name))
+           
+        itr+=1
+    model_name = "{}_ckpt.pth".format(epoch)
+    print("saving the model.. {}".format(model_name))
+    save_checkpoint(model, "./ckpt/{}/{}".format(train_name,model_name))
 
-    model.eval()
-    steps = len(test_d) // batch_size
-    for batch_id in tqdm(range(steps)):
-        batch = test_d[batch_size*batch_id:batch_size*(batch_id+1)]
-        token_ids, valid_length, segment_ids, labels  = [], [], [], []
+# evaluation
+model.eval()
 
-        for el in range(len(batch)):
-            token_ids.append(batch[el][0]['input_ids'])
-            valid_length.append(batch[el][0]['token_type_ids'])
-            segment_ids.append(batch[el][0]['attention_mask'])
+rate_eval_dataset = RateDataset(test_df)
+print(f"Eval dataset: {len(rate_eval_dataset)}")
+eval_loader = DataLoader(rate_eval_dataset, batch_size=16, shuffle=False, num_workers=2)
 
-            label = batch[el][1]
-            labels.append(label)
+total_loss = 0
+total_len = 0
+total_correct = 0
 
-        token_ids = torch.LongTensor(token_ids).to(device)
-        valid_length = torch.LongTensor(valid_length).to(device)
-        segment_ids = torch.LongTensor(segment_ids).to(device)
-        labels = torch.LongTensor(labels).to(device)
+for text, label in eval_loader:
+    # encoding and zero padding
+    encoded_list = [tokenizer.encode(t, add_special_tokens=True) for t in text]
+    for i in range(len(encoded_list)):
+       e = encoded_list[i]
+       if (len(e) > 512):
+           encoded_list[i] = e[:512]
+    padded_list =  [e + [0] * (512-len(e)) for e in encoded_list]
+    
+    sample = torch.tensor(padded_list)
+    sample, label = sample.to(device), label.to(device)
+    labels = torch.tensor(label)
+    outputs = model(sample, labels=labels)
+    _, logits = outputs
 
-        out = model(token_ids, valid_length, segment_ids)
-        test_acc += calc_accuracy(out, labels)
-    print("epoch {} test acc {}".format(e, test_acc / (batch_id+1)))
-    writer.add_scalar("test/accuracy", test_acc/(batch_id+1), e)
-    writer.close()
-    print("done writing")
+    pred = torch.argmax(F.softmax(logits), dim=1)
+    correct = pred.eq(labels)
+    total_correct += correct.sum().item()
+    total_len += len(labels)
+
+print('Test accuracy: ', total_correct / total_len)

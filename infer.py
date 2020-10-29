@@ -21,16 +21,18 @@ def test(ckpt):
    while(1):
       sentence = input("Enter Sentence: ")
       encode = tokenizer.encode(sentence, add_special_tokens=True)
-      print(f"encode: {encode}")
       padded = [encode + [0] * (512-len(encode))]
       sentence = torch.tensor(padded)
       label = torch.tensor([0])
 
       results = model(sentence, label)
-      print(f"results: {results[0]}")
       _softmax = F.softmax(results[0], dim=1)
       pred = torch.argmax(F.softmax(results[0], dim=1))
-      print(f"The rate is likely to be {pred+1}")
+      print(f"Rate: {pred+1}")
+      print("\n")
 
 if __name__ == "__main__":
-   test("./ckpt/batch_size_8_train_100k_epoch_5/3_280000_0.740_ckpt.pth")
+   ckpt = input("Path to the checkpoint: ")
+   print("\n")
+#   test("./ckpt/batch_size_8_train_100k_epoch_5/3_280000_0.740_ckpt.pth")
+   test(ckpt)
