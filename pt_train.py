@@ -7,44 +7,10 @@ from torch.optim import Adam
 import torch.nn.functional as F
 import os
 
-"""
-class BertForMultiLabelSequenceClassification(PreTrainedBertModel):
+train_name = "batch_size_16_train_300k_epoch_5_new_data"
 
-    def __init__(self, config, num_labels=5):
-        super(BertForMultiLabelSequenceClassification, self).__init__(config)
-        self.num_labels = num_labels
-        self.bert = BertModel(config)
-        self.dropout = torch.nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = torch.nn.Linear(config.hidden_size, num_labels)
-        self.apply(self.init_bert_weights)
-
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
-        _, pooled_output = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
-        pooled_output = self.dropout(pooled_output)
-        logits = self.classifier(pooled_output)
-
-        if labels is not None:
-            loss_fct = BCEWithLogitsLoss()
-            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1, self.num_labels))
-            return loss
-        else:
-            return logits
-        
-    def freeze_bert_encoder(self):
-        for param in self.bert.parameters():
-            param.requires_grad = False
-    
-    def unfreeze_bert_encoder(self):
-        for param in self.bert.parameters():
-            param.requires_grad = True
-"""
-
-
-
-train_name = "batch_size_8_train_100k_epoch_5"
-
-train_df = pd.read_csv('./data/train.csv', sep=',')
-test_df = pd.read_csv('./data/test.csv', sep=',')
+train_df = pd.read_csv('./data/n_train.csv', sep=',')
+test_df = pd.read_csv('./data/n_test.csv', sep=',')
 
 """
 train_df = pd.read_csv('./nsmc/ratings_train.txt', sep='\t')
@@ -57,8 +23,8 @@ test_df.dropna(inplace=True)
 #train_df = train_df.sample(frac=0.1, random_state=999)
 #test_df = test_df.sample(frac=0.1, random_state=999)
 
-train_df = train_df.sample(frac=0.031, random_state=999) # about 100,000
-test_df = test_df.sample(frac=0.031, random_state=999)
+train_df = train_df.sample(frac=1.0, random_state=999) # about 100,000
+test_df = test_df.sample(frac=1.0, random_state=999)
 
 class NsmcDataset(Dataset):
     ''' Naver Sentiment Movie Corpus Dataset '''
@@ -77,7 +43,7 @@ class NsmcDataset(Dataset):
 nsmc_train_dataset = NsmcDataset(train_df)
 print(f"Train dataset: {len(nsmc_train_dataset)}")
 itr_num = len(nsmc_train_dataset)
-train_loader = DataLoader(nsmc_train_dataset, batch_size=8, shuffle=True, num_workers=2)
+train_loader = DataLoader(nsmc_train_dataset, batch_size=16, shuffle=True, num_workers=2)
 
 device = torch.device("cuda:7")
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
@@ -131,7 +97,8 @@ for epoch in range(epochs):
         total_loss += loss.item()
         loss.backward()
         optimizer.step()
-        
+        acc = total_correct/total_len    
+
         if itr % p_itr == 0:
             print("\n############")
             print('[Epoch {}/{}] Iteration {}/{} -> Train Loss: {:.4f}, Accuracy: {:.3f}'.format(epoch+1, epochs, itr, itr_num, total_loss/p_itr, total_correct/total_len))
@@ -142,7 +109,7 @@ for epoch in range(epochs):
 
         if itr % s_itr == 0:
             # save model
-            model_name = "{}_{}_ckpt.pth".format(epoch, itr)
+            model_name = "{}_{}_{:.3f}_ckpt.pth".format(epoch, itr, acc)
             print("saving the model.. {}".format(model_name))
             save_checkpoint(model, "./ckpt/{}/{}".format(train_name,model_name))
            
@@ -150,12 +117,13 @@ for epoch in range(epochs):
     model_name = "{}_ckpt.pth".format(epoch)
     print("saving the model.. {}".format(model_name))
     save_checkpoint(model, "./ckpt/{}/{}".format(train_name,model_name))
+
 # evaluation
 model.eval()
 
 nsmc_eval_dataset = NsmcDataset(test_df)
 print(f"Eval dataset: {len(nsmc_eval_dataset)}")
-eval_loader = DataLoader(nsmc_eval_dataset, batch_size=8, shuffle=False, num_workers=2)
+eval_loader = DataLoader(nsmc_eval_dataset, batch_size=16, shuffle=False, num_workers=2)
 
 total_loss = 0
 total_len = 0
